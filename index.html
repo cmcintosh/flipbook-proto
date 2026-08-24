@@ -919,6 +919,7 @@ function endDragFlip(clientX, clientY){
 
     setTimeout(() => {
       resetFlipPage();
+      isFlipping = false;
       dragFlip = null;
     }, 700);
   }
