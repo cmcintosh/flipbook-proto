@@ -152,12 +152,16 @@ html,body{width:100%;height:100%;overflow:hidden;font-family:-apple-system,Blink
   position:absolute;top:0;
   transform-style:preserve-3d;
   transform-origin:left center;
-  transition:transform .85s cubic-bezier(0.645,0.045,0.355,1);
+  transition:transform .7s cubic-bezier(0.25,0.1,0.25,1);
   will-change:transform;
   z-index:50;
   backface-visibility:hidden;
 }
 .flip-page.flipping{
+  z-index:100;
+}
+.flip-page.dragging{
+  transition:none;
   z-index:100;
 }
 .flip-page .face{
@@ -176,31 +180,48 @@ html,body{width:100%;height:100%;overflow:hidden;font-family:-apple-system,Blink
   position:absolute;inset:0;width:100%;height:100%;
 }
 
-/* Lighting overlay on flipping page */
+/* Lighting overlay on flipping page — dynamic during drag */
 .flip-page .face .lighting{
   position:absolute;inset:0;pointer-events:none;z-index:5;
   background:transparent;
-  transition:background .85s cubic-bezier(0.645,0.045,0.355,1);
 }
 
-/* Shadow cast on the page beneath during flip */
+/* Shadow cast on the page beneath during flip — dynamic during drag */
 .shadow-overlay{
   position:absolute;inset:0;pointer-events:none;z-index:40;
   background:transparent;
-  transition:background .85s cubic-bezier(0.645,0.045,0.355,1);
+}
+
+/* Page curl edge — visible during drag */
+.flip-page .face .curl-edge{
+  position:absolute;inset:0;pointer-events:none;z-index:6;
+  background:transparent;
 }
 
 /* Page corner curl hint */
 .corner-curl{
-  position:absolute;bottom:0;right:0;width:60px;height:60px;
-  pointer-events:none;z-index:6;
-  background:linear-gradient(135deg,transparent 50%,rgba(0,0,0,0.05) 60%,rgba(0,0,0,0.1) 100%);
+  position:absolute;bottom:0;right:0;width:80px;height:80px;
+  pointer-events:auto;z-index:6;
+  background:linear-gradient(135deg,transparent 50%,rgba(0,0,0,0.04) 60%,rgba(0,0,0,0.08) 80%,rgba(0,0,0,0.12) 100%);
   border-radius:0 0 6px 0;
-  transition:opacity .3s ease;
+  transition:opacity .3s ease,transform .3s ease;
   opacity:0;
+  cursor:grab;
 }
+.corner-curl:active{cursor:grabbing}
 .right-side .corner-curl{opacity:0}
-#bookWrapper:hover .right-side .corner-curl{opacity:1}
+#bookWrapper:hover .right-side .corner-curl{opacity:1;transform:scale(1.05)}
+.left-side .corner-curl-left{
+  position:absolute;bottom:0;left:0;width:80px;height:80px;
+  pointer-events:auto;z-index:6;
+  background:linear-gradient(225deg,transparent 50%,rgba(0,0,0,0.04) 60%,rgba(0,0,0,0.08) 80%,rgba(0,0,0,0.12) 100%);
+  border-radius:0 0 0 6px;
+  transition:opacity .3s ease,transform .3s ease;
+  opacity:0;
+  cursor:grab;
+}
+.corner-curl-left:active{cursor:grabbing}
+#bookWrapper:hover .left-side .corner-curl-left{opacity:1;transform:scale(1.05)}
 
 /* ════════════════════════════════════════════════════════════════
    NAVIGATION ARROWS
@@ -544,7 +565,7 @@ function getAudioCtx(){
   return audioCtx;
 }
 
-function playFlipSound(){
+function playFlipSound(volume = 1.0){
   try{
     const ctx = getAudioCtx();
     if(ctx.state === 'suspended') ctx.resume();
@@ -578,10 +599,10 @@ function playFlipSound(){
     hp.type = 'highpass';
     hp.frequency.value = 400;
 
-    // Gain envelope
+    // Gain envelope — scaled by volume param
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(0, now);
-    gain.gain.linearRampToValueAtTime(0.18, now + 0.02);
+    gain.gain.linearRampToValueAtTime(0.18 * volume, now + 0.02);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
 
     noise.connect(filter);
@@ -756,8 +777,167 @@ function updateUI(){
 }
 
 /* ════════════════════════════════════════════════════════════════
-   PAGE FLIP ANIMATION
+   PAGE FLIP — drag-aware with polished animation
    ════════════════════════════════════════════════════════════════ */
+
+// Drag state
+let dragFlip = null;  // { direction, startX, currentAngle, startTime }
+
+function startDragFlip(direction, clientX, clientY){
+  if(isFlipping) return;
+  if(direction === 'forward' && currentPage >= (isMobile ? totalPages : totalPages - 1)) return;
+  if(direction === 'backward' && currentPage <= 1) return;
+
+  const { w } = getPageDimensions();
+  dragFlip = {
+    direction,
+    startX: clientX,
+    startY: clientY,
+    w,
+    frontPageNum: direction === 'forward'
+      ? (isMobile ? currentPage : currentPage + 1)
+      : (isMobile ? currentPage : currentPage),
+    backPageNum: direction === 'forward'
+      ? (isMobile ? currentPage + 1 : currentPage + 2)
+      : (isMobile ? currentPage - 1 : currentPage - 1),
+  };
+
+  // Position flip page
+  if(direction === 'forward'){
+    flipPage.style.left = (isMobile ? '0px' : (w + 'px'));
+    flipPage.style.transformOrigin = 'left center';
+    flipPage.style.transform = 'rotateY(0deg)';
+  } else {
+    flipPage.style.left = '0px';
+    flipPage.style.transformOrigin = isMobile ? 'left center' : 'right center';
+    flipPage.style.transform = isMobile ? 'rotateY(-180deg)' : 'rotateY(180deg)';
+  }
+
+  flipPage.style.display = 'block';
+  flipPage.classList.add('dragging');
+
+  // Render faces
+  renderPage(dragFlip.frontPageNum, canvasFlipFront, renderScale);
+  renderPage(dragFlip.backPageNum, canvasFlipBack, renderScale);
+
+  if(direction === 'forward'){
+    canvasRight.style.opacity = '0';
+  } else {
+    if(!isMobile) canvasLeft.style.opacity = '0';
+  }
+
+  // Play subtle sound on grab
+  playFlipSound(0.3);
+}
+
+function updateDragFlip(clientX, clientY){
+  if(!dragFlip) return;
+
+  const { w } = dragFlip;
+  const dx = clientX - dragFlip.startX;
+  const progress = Math.max(0, Math.min(1, Math.abs(dx) / w));
+  const angle = progress * 180;
+
+  if(dragFlip.direction === 'forward'){
+    flipPage.style.transform = `rotateY(${-angle}deg)`;
+  } else {
+    if(isMobile){
+      flipPage.style.transform = `rotateY(${-180 + angle}deg)`;
+    } else {
+      flipPage.style.transform = `rotateY(${180 - angle}deg)`;
+    }
+  }
+
+  // Dynamic lighting based on flip progress
+  updateFlipLighting(progress, dragFlip.direction);
+}
+
+function updateFlipLighting(progress, direction){
+  const t = progress; // 0 → 1
+
+  // Front face: gets darker as it lifts (light behind)
+  const frontDark = t * 0.35;
+  if(direction === 'forward'){
+    lightingFront.style.background = `linear-gradient(to left, rgba(0,0,0,${frontDark}) 0%, rgba(0,0,0,${frontDark * 0.3}) 40%, transparent 100%)`;
+    lightingBack.style.background = `linear-gradient(to right, rgba(0,0,0,${0.15 * t}) 0%, transparent 50%)`;
+    shadowOverlay.style.background = `linear-gradient(to left, rgba(0,0,0,${0.25 * t}) 0%, rgba(0,0,0,${0.1 * t}) 30%, transparent 60%)`;
+  } else {
+    lightingFront.style.background = `linear-gradient(to right, rgba(0,0,0,${frontDark}) 0%, rgba(0,0,0,${frontDark * 0.3}) 40%, transparent 100%)`;
+    lightingBack.style.background = `linear-gradient(to left, rgba(0,0,0,${0.15 * t}) 0%, transparent 50%)`;
+    shadowOverlay.style.background = `linear-gradient(to right, rgba(0,0,0,${0.25 * t}) 0%, rgba(0,0,0,${0.1 * t}) 30%, transparent 60%)`;
+  }
+}
+
+function endDragFlip(clientX, clientY){
+  if(!dragFlip) return;
+
+  const { w } = dragFlip;
+  const dx = clientX - dragFlip.startX;
+  const progress = Math.max(0, Math.min(1, Math.abs(dx) / w));
+  const threshold = 0.3; // 30% drag = complete flip
+
+  flipPage.classList.remove('dragging');
+  flipPage.classList.add('flipping');
+
+  if(progress >= threshold){
+    // Complete the flip
+    playFlipSound(1.0);
+    if(dragFlip.direction === 'forward'){
+      flipPage.style.transform = 'rotateY(-180deg)';
+    } else {
+      flipPage.style.transform = isMobile ? 'rotateY(0deg)' : 'rotateY(0deg)';
+    }
+    // Set final lighting
+    updateFlipLighting(1, dragFlip.direction);
+
+    setTimeout(async () => {
+      const step = isMobile ? 1 : 2;
+      if(dragFlip.direction === 'forward'){
+        currentPage += step;
+        if(currentPage > totalPages) currentPage = totalPages;
+      } else {
+        currentPage -= step;
+        if(currentPage < 1) currentPage = 1;
+      }
+      resetFlipPage();
+      await displaySpread();
+      isFlipping = false;
+      dragFlip = null;
+    }, 700);
+
+  } else {
+    // Snap back — no flip
+    if(dragFlip.direction === 'forward'){
+      flipPage.style.transform = 'rotateY(0deg)';
+    } else {
+      flipPage.style.transform = isMobile ? 'rotateY(-180deg)' : 'rotateY(180deg)';
+    }
+    // Reset lighting
+    lightingFront.style.background = 'transparent';
+    lightingBack.style.background = 'transparent';
+    shadowOverlay.style.background = 'transparent';
+
+    setTimeout(() => {
+      resetFlipPage();
+      dragFlip = null;
+    }, 700);
+  }
+}
+
+function resetFlipPage(){
+  flipPage.style.display = 'none';
+  flipPage.classList.remove('flipping');
+  flipPage.style.transform = 'rotateY(0deg)';
+  flipPage.style.transformOrigin = 'left center';
+  flipPage.style.left = isMobile ? '0px' : (getPageDimensions().w + 'px');
+  shadowOverlay.style.left = isMobile ? '0px' : (getPageDimensions().w + 'px');
+  lightingFront.style.background = 'transparent';
+  lightingBack.style.background = 'transparent';
+  shadowOverlay.style.background = 'transparent';
+  canvasRight.style.opacity = '1';
+  if(!isMobile) canvasLeft.style.opacity = '1';
+}
+
 async function flipForward(){
   if(isFlipping) return;
   if(isMobile){
@@ -768,136 +948,78 @@ async function flipForward(){
   isFlipping = true;
   playFlipSound();
 
-  const { w, h } = getPageDimensions();
+  const { w } = getPageDimensions();
   const step = isMobile ? 1 : 2;
+  const frontPageNum = isMobile ? currentPage : currentPage + 1;
+  const backPageNum = isMobile ? currentPage + 1 : currentPage + 2;
 
-  // Determine which pages to render on flip faces
-  const frontPageNum = isMobile ? currentPage : currentPage + 1;  // right page (front of flip)
-  const backPageNum = isMobile ? currentPage + 1 : currentPage + 2; // next page (back of flip)
-
-  // Show and position flip page
+  flipPage.style.left = isMobile ? '0px' : (w + 'px');
+  flipPage.style.transformOrigin = 'left center';
+  flipPage.style.transform = 'rotateY(0deg)';
   flipPage.style.display = 'block';
   flipPage.classList.add('flipping');
-  flipPage.style.transform = 'rotateY(0deg)';
 
-  // Render front face
   await renderPage(frontPageNum, canvasFlipFront, renderScale);
-  // Render back face
   await renderPage(backPageNum, canvasFlipBack, renderScale);
-
-  // Hide the static right page content during flip (the flip page covers it)
   canvasRight.style.opacity = '0';
 
-  // Animate
+  // Animate with refined easing
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       flipPage.style.transform = 'rotateY(-180deg)';
-
-      // Lighting effects — simulate light hitting the turning page
-      lightingFront.style.background = 'linear-gradient(to left, rgba(0,0,0,0.25) 0%, rgba(0,0,0,0.05) 40%, transparent 100%)';
-      lightingBack.style.background = 'linear-gradient(to right, rgba(0,0,0,0.15) 0%, transparent 50%)';
-
-      // Shadow on page beneath
-      shadowOverlay.style.background = 'linear-gradient(to left, rgba(0,0,0,0.2) 0%, rgba(0,0,0,0.08) 30%, transparent 60%)';
+      // Dynamic lighting via CSS transition
+      lightingFront.style.background = 'linear-gradient(to left, rgba(0,0,0,0.3) 0%, rgba(0,0,0,0.08) 40%, transparent 100%)';
+      lightingBack.style.background = 'linear-gradient(to right, rgba(0,0,0,0.12) 0%, transparent 50%)';
+      shadowOverlay.style.background = 'linear-gradient(to left, rgba(0,0,0,0.22) 0%, rgba(0,0,0,0.08) 30%, transparent 60%)';
     });
   });
 
-  // After animation completes
   setTimeout(async () => {
     currentPage += step;
     if(currentPage > totalPages) currentPage = totalPages;
-
-    // Reset flip page
-    flipPage.style.display = 'none';
-    flipPage.classList.remove('flipping');
-    flipPage.style.transform = 'rotateY(0deg)';
-    lightingFront.style.background = 'transparent';
-    lightingBack.style.background = 'transparent';
-    shadowOverlay.style.background = 'transparent';
-    canvasRight.style.opacity = '1';
-
+    resetFlipPage();
     await displaySpread();
     isFlipping = false;
-  }, 880);
+  }, 720);
 }
 
 async function flipBackward(){
   if(isFlipping) return;
-  if(isMobile){
-    if(currentPage <= 1) return;
-  } else {
-    if(currentPage <= 1) return;
-  }
+  if(currentPage <= 1) return;
   isFlipping = true;
   playFlipSound();
 
-  const { w, h } = getPageDimensions();
+  const { w } = getPageDimensions();
   const step = isMobile ? 1 : 2;
+  const frontPageNum = isMobile ? currentPage : currentPage;
+  const backPageNum = isMobile ? currentPage - 1 : currentPage - 1;
 
-  // For backward flip, the left page flips back to reveal previous page
-  const frontPageNum = isMobile ? currentPage : currentPage;  // left page (front of flip)
-  const backPageNum = isMobile ? currentPage - 1 : currentPage - 1; // previous page (back of flip)
-
-  // Position flip page on the left side, origin from right edge
-  if(isMobile){
-    flipPage.style.left = '0px';
-    flipPage.style.transformOrigin = 'left center';
-  } else {
-    flipPage.style.left = '0px';
-    flipPage.style.transformOrigin = 'right center';
-  }
-
-  // Show and render
+  flipPage.style.left = '0px';
+  flipPage.style.transformOrigin = isMobile ? 'left center' : 'right center';
+  flipPage.style.transform = isMobile ? 'rotateY(-180deg)' : 'rotateY(180deg)';
   flipPage.style.display = 'block';
   flipPage.classList.add('flipping');
 
-  // For backward, start at -180 (already flipped) and animate to 0
-  if(!isMobile){
-    // Mirror: flip from left, start rotated
-    flipPage.style.transform = 'rotateY(180deg)';
-  } else {
-    flipPage.style.transform = 'rotateY(-180deg)';
-  }
-
   await renderPage(frontPageNum, canvasFlipFront, renderScale);
   await renderPage(backPageNum, canvasFlipBack, renderScale);
-
-  // Hide static left page
   if(!isMobile) canvasLeft.style.opacity = '0';
 
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      if(!isMobile){
-        flipPage.style.transform = 'rotateY(0deg)';
-      } else {
-        flipPage.style.transform = 'rotateY(0deg)';
-      }
-
-      lightingFront.style.background = 'linear-gradient(to right, rgba(0,0,0,0.25) 0%, rgba(0,0,0,0.05) 40%, transparent 100%)';
-      lightingBack.style.background = 'linear-gradient(to left, rgba(0,0,0,0.15) 0%, transparent 50%)';
-      shadowOverlay.style.background = 'linear-gradient(to right, rgba(0,0,0,0.2) 0%, rgba(0,0,0,0.08) 30%, transparent 60%)';
-      shadowOverlay.style.left = isMobile ? '0px' : '0px';
+      flipPage.style.transform = 'rotateY(0deg)';
+      lightingFront.style.background = 'linear-gradient(to right, rgba(0,0,0,0.3) 0%, rgba(0,0,0,0.08) 40%, transparent 100%)';
+      lightingBack.style.background = 'linear-gradient(to left, rgba(0,0,0,0.12) 0%, transparent 50%)';
+      shadowOverlay.style.background = 'linear-gradient(to right, rgba(0,0,0,0.22) 0%, rgba(0,0,0,0.08) 30%, transparent 60%)';
     });
   });
 
   setTimeout(async () => {
     currentPage -= step;
     if(currentPage < 1) currentPage = 1;
-
-    flipPage.style.display = 'none';
-    flipPage.classList.remove('flipping');
-    flipPage.style.transform = 'rotateY(0deg)';
-    flipPage.style.transformOrigin = 'left center';
-    flipPage.style.left = isMobile ? '0px' : (getPageDimensions().w + 'px');
-    shadowOverlay.style.left = isMobile ? '0px' : (getPageDimensions().w + 'px');
-    lightingFront.style.background = 'transparent';
-    lightingBack.style.background = 'transparent';
-    shadowOverlay.style.background = 'transparent';
-    if(!isMobile) canvasLeft.style.opacity = '1';
-
+    resetFlipPage();
     await displaySpread();
     isFlipping = false;
-  }, 880);
+  }, 720);
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -1190,8 +1312,94 @@ $('btnDownload').addEventListener('click', () => {
 
 navLeft.addEventListener('click', flipBackward);
 navRight.addEventListener('click', flipForward);
-clickLeft.addEventListener('click', flipBackward);
-clickRight.addEventListener('click', flipForward);
+
+// Drag-to-flip on the book edges
+let pointerDown = false;
+let pointerDownTime = 0;
+let pointerDownX = 0;
+let pointerDownY = 0;
+let isDragFlipping = false;
+
+// Right click zone — drag forward
+clickRight.addEventListener('pointerdown', (e) => {
+  if(isFlipping || zoomMode) return;
+  e.preventDefault();
+  pointerDown = true;
+  pointerDownTime = Date.now();
+  pointerDownX = e.clientX;
+  pointerDownY = e.clientY;
+  isDragFlipping = false;
+});
+
+clickLeft.addEventListener('pointerdown', (e) => {
+  if(isFlipping || zoomMode) return;
+  e.preventDefault();
+  pointerDown = true;
+  pointerDownTime = Date.now();
+  pointerDownX = e.clientX;
+  pointerDownY = e.clientY;
+  isDragFlipping = false;
+});
+
+window.addEventListener('pointermove', (e) => {
+  if(!pointerDown) return;
+  const dx = e.clientX - pointerDownX;
+  const dy = e.clientY - pointerDownY;
+
+  // If moved enough and not yet started drag flip, start it
+  if(!isDragFlipping && !isFlipping && Math.abs(dx) > 15 && Math.abs(dx) > Math.abs(dy) * 1.5){
+    const direction = dx < 0 ? 'forward' : 'backward';
+    // Only start if we're in the right zone
+    const rect = app.getBoundingClientRect();
+    const startX = pointerDownX - rect.left;
+    const zoneWidth = rect.width * 0.35;
+
+    if(direction === 'forward' && startX > rect.width - zoneWidth){
+      isFlipping = true;
+      isDragFlipping = true;
+      startDragFlip('forward', pointerDownX, pointerDownY);
+    } else if(direction === 'backward' && startX < zoneWidth){
+      isFlipping = true;
+      isDragFlipping = true;
+      startDragFlip('backward', pointerDownX, pointerDownY);
+    }
+  }
+
+  if(isDragFlipping && dragFlip){
+    updateDragFlip(e.clientX, e.clientY);
+  }
+});
+
+window.addEventListener('pointerup', (e) => {
+  if(isDragFlipping){
+    endDragFlip(e.clientX, e.clientY);
+  } else if(pointerDown && !isFlipping){
+    // Treat as click — check if it was in a click zone
+    const dx = Math.abs(e.clientX - pointerDownX);
+    const dy = Math.abs(e.clientY - pointerDownY);
+    if(dx < 8 && dy < 8){
+      // Quick tap — flip
+      const rect = app.getBoundingClientRect();
+      const startX = pointerDownX - rect.left;
+      const zoneWidth = rect.width * 0.35;
+      if(startX > rect.width - zoneWidth){
+        flipForward();
+      } else if(startX < zoneWidth){
+        flipBackward();
+      }
+    }
+  }
+  pointerDown = false;
+  isDragFlipping = false;
+});
+
+window.addEventListener('pointercancel', () => {
+  if(isDragFlipping && dragFlip){
+    endDragFlip(pointerDownX, pointerDownY); // snap back
+  }
+  pointerDown = false;
+  isDragFlipping = false;
+});
 
 backdrop.addEventListener('click', closePanels);
 
