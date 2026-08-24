@@ -789,7 +789,7 @@ async function flipForward(){
   canvasRight.style.opacity = '0';
 
   // Animate
-  requestAnimationFrame(() {
+  requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       flipPage.style.transform = 'rotateY(-180deg)';
 
@@ -1119,7 +1119,7 @@ window.addEventListener('mouseup', () => {
   if(isPanning){
     isPanning = false;
     zoomCanvas.style.transition = 'transform 0.2s ease';
-    setTimeout(() => { if(!isPanning) /* allow click-to-close after pan */ }, 50);
+    setTimeout(() => { if(!isPanning) { /* allow click-to-close after pan */ } }, 50);
   }
 });
 
