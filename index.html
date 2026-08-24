@@ -820,10 +820,25 @@ function startDragFlip(direction, clientX, clientY){
   renderPage(dragFlip.frontPageNum, canvasFlipFront, renderScale);
   renderPage(dragFlip.backPageNum, canvasFlipBack, renderScale);
 
+  // Pre-render destination so content shows through during drag
   if(direction === 'forward'){
-    canvasRight.style.opacity = '0';
+    if(isMobile){
+      renderPage(dragFlip.backPageNum, canvasRight, renderScale);
+    } else {
+      renderPage(dragFlip.backPageNum, canvasLeft, renderScale);
+      if(dragFlip.backPageNum + 1 <= totalPages){
+        renderPage(dragFlip.backPageNum + 1, canvasRight, renderScale);
+      }
+    }
   } else {
-    if(!isMobile) canvasLeft.style.opacity = '0';
+    if(isMobile){
+      renderPage(dragFlip.backPageNum, canvasRight, renderScale);
+    } else {
+      if(dragFlip.backPageNum - 1 >= 1){
+        renderPage(dragFlip.backPageNum - 1, canvasLeft, renderScale);
+      }
+      renderPage(dragFlip.backPageNum, canvasRight, renderScale);
+    }
   }
 
   // Play subtle sound on grab
@@ -935,8 +950,6 @@ function resetFlipPage(){
   lightingFront.style.background = 'transparent';
   lightingBack.style.background = 'transparent';
   shadowOverlay.style.background = 'transparent';
-  canvasRight.style.opacity = '1';
-  if(!isMobile) canvasLeft.style.opacity = '1';
 }
 
 async function flipForward(){
@@ -962,7 +975,19 @@ async function flipForward(){
 
   await renderPage(frontPageNum, canvasFlipFront, renderScale);
   await renderPage(backPageNum, canvasFlipBack, renderScale);
-  canvasRight.style.opacity = '0';
+
+  // Pre-render destination content so it's visible beneath the flipping page
+  if(isMobile){
+    await renderPage(currentPage + 1, canvasRight, renderScale);
+  } else {
+    // Desktop: after flip, left page = currentPage+2, right = currentPage+3
+    await renderPage(currentPage + 2, canvasLeft, renderScale);
+    if(currentPage + 3 <= totalPages){
+      await renderPage(currentPage + 3, canvasRight, renderScale);
+    } else {
+      clearCanvas(canvasRight);
+    }
+  }
 
   // Animate with refined easing
   requestAnimationFrame(() => {
@@ -1003,7 +1028,19 @@ async function flipBackward(){
 
   await renderPage(frontPageNum, canvasFlipFront, renderScale);
   await renderPage(backPageNum, canvasFlipBack, renderScale);
-  if(!isMobile) canvasLeft.style.opacity = '0';
+
+  // Pre-render destination content so it's visible beneath the flipping page
+  if(isMobile){
+    await renderPage(currentPage - 1, canvasRight, renderScale);
+  } else {
+    // Desktop: after flip back, left = currentPage-2, right = currentPage-1
+    if(currentPage - 2 >= 1){
+      await renderPage(currentPage - 2, canvasLeft, renderScale);
+    } else {
+      clearCanvas(canvasLeft);
+    }
+    await renderPage(currentPage - 1, canvasRight, renderScale);
+  }
 
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
