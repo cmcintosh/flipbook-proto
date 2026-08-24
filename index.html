@@ -497,7 +497,7 @@ html,body{width:100%;height:100%;overflow:hidden;font-family:-apple-system,Blink
 </div>
 
 <!-- ZOOM CONTAINER -->
-<div id="zoomContainer"><canvas id="zoomCanvas"></canvas></div>
+<div id="zoomContainer"><canvas id="zoomCanvas"></canvas><div id="zoomHint" style="position:absolute;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.6);color:#fff;padding:8px 16px;border-radius:20px;font-size:13px;pointer-events:none;opacity:0;transition:opacity .3s ease;z-index:10;white-space:nowrap">Scroll to zoom · Drag to pan · Esc to exit</div></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>
@@ -1212,7 +1212,9 @@ async function toggleZoom(){
   if(zoomMode){
     exitZoom();
   } else {
-    enterZoom();
+    await enterZoom();
+    zoomJustOpened = true;
+    setTimeout(() => { zoomJustOpened = false; }, 200);
   }
 }
 
@@ -1231,9 +1233,12 @@ async function enterZoom(){
     await page.render({ canvasContext: zoomCanvas.getContext('2d'), viewport: vp }).promise;
   }catch(e){}
   zoomContainer.classList.add('active');
-  zoomScale = 1;
+  zoomScale = 1.5;  // Start at 1.5x so content is already enlarged and panning works
   panOffset = { x: 0, y: 0 };
   applyZoomTransform();
+  // Show hint
+  const hint = $('zoomHint');
+  if(hint){ hint.style.opacity = '1'; setTimeout(() => { hint.style.opacity = '0'; }, 3000); }
 }
 
 function exitZoom(){
@@ -1250,23 +1255,60 @@ function applyZoomTransform(){
   zoomCanvas.style.transition = isPanning ? 'none' : 'transform 0.2s ease';
 }
 
-// Zoom interactions
+// Zoom interactions — use a flag to distinguish click-to-close from the opening click
+let zoomJustOpened = false;
+
 zoomContainer.addEventListener('click', (e) => {
-  if(!isPanning) exitZoom();
+  if(zoomJustOpened){
+    zoomJustOpened = false;
+    return;  // Ignore the click that just opened zoom
+  }
+  if(!isPanning && zoomScale <= 1.5){
+    // Click on background (not panning, not zoomed in past initial) = exit
+    exitZoom();
+  } else if(!isPanning){
+    // Click when zoomed in = double-click to zoom further
+    zoomScale = Math.min(5, zoomScale * 1.5);
+    applyZoomTransform();
+  }
+});
+
+// Double-click to zoom in further
+zoomContainer.addEventListener('dblclick', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  if(zoomScale >= 5) return;
+  // Zoom toward click point
+  const rect = zoomContainer.getBoundingClientRect();
+  const cx = e.clientX - rect.left - rect.width / 2;
+  const cy = e.clientY - rect.top - rect.height / 2;
+  zoomScale = Math.min(5, zoomScale * 1.8);
+  panOffset = { x: -cx * (zoomScale - 1), y: -cy * (zoomScale - 1) };
+  applyZoomTransform();
 });
 
 zoomContainer.addEventListener('wheel', (e) => {
   e.preventDefault();
-  const delta = e.deltaY > 0 ? 0.9 : 1.1;
-  zoomScale = Math.max(0.5, Math.min(5, zoomScale * delta));
-  applyZoomTransform();
-});
+  const delta = e.deltaY > 0 ? 0.85 : 1.15;
+  const newScale = Math.max(1, Math.min(5, zoomScale * delta));
+  // Zoom toward cursor
+  if(newScale !== zoomScale){
+    const rect = zoomContainer.getBoundingClientRect();
+    const cx = e.clientX - rect.left - rect.width / 2;
+    const cy = e.clientY - rect.top - rect.height / 2;
+    const ratio = newScale / zoomScale;
+    panOffset = { x: cx - (cx - panOffset.x) * ratio, y: cy - (cy - panOffset.y) * ratio };
+    zoomScale = newScale;
+    applyZoomTransform();
+  }
+}, { passive: false });
 
 zoomContainer.addEventListener('mousedown', (e) => {
   if(zoomScale <= 1) return;
   isPanning = true;
   panStart = { x: e.clientX - panOffset.x, y: e.clientY - panOffset.y };
   zoomCanvas.style.transition = 'none';
+  e.stopPropagation();  // Prevent click-to-close
 });
 
 window.addEventListener('mousemove', (e) => {
@@ -1279,7 +1321,8 @@ window.addEventListener('mouseup', () => {
   if(isPanning){
     isPanning = false;
     zoomCanvas.style.transition = 'transform 0.2s ease';
-    setTimeout(() => { if(!isPanning) { /* allow click-to-close after pan */ } }, 50);
+    zoomJustOpened = true;  // Prevent the click that follows mouseup from closing zoom
+    setTimeout(() => { zoomJustOpened = false; }, 100);
   }
 });
 
@@ -1452,6 +1495,27 @@ document.addEventListener('keydown', (e) => {
   else if(e.key === 'f' || e.key === 'F') toggleFullscreen();
   else if(e.key === 'z' || e.key === 'Z') toggleZoom();
   else if(e.key === 't' || e.key === 'T') toggleThumbs();
+  else if(zoomMode){
+    if(e.key === '+' || e.key === '='){
+      e.preventDefault();
+      zoomScale = Math.min(5, zoomScale * 1.3);
+      applyZoomTransform();
+    }
+    else if(e.key === '-'){
+      e.preventDefault();
+      zoomScale = Math.max(1, zoomScale * 0.77);
+      if(zoomScale <= 1) panOffset = { x: 0, y: 0 };
+      applyZoomTransform();
+    }
+    else if(e.key === '0'){
+      e.preventDefault();
+      zoomScale = 1.5;
+      panOffset = { x: 0, y: 0 };
+      applyZoomTransform();
+    }
+    else if(e.key === 'ArrowUp'){ e.preventDefault(); panOffset.y += 50; applyZoomTransform(); }
+    else if(e.key === 'ArrowDown'){ e.preventDefault(); panOffset.y -= 50; applyZoomTransform(); }
+  }
 });
 
 // Resize
